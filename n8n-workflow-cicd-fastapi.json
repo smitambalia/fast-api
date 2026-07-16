@@ -1,0 +1,250 @@
+{
+  "name": "CI/CD FastAPI → Docker Hub → K3s",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github-fastapi-ci",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-001-github",
+      "name": "GitHub Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [180, 320],
+      "webhookId": "github-fastapi-ci",
+      "notes": "GitHub → Settings → Webhooks → Payload URL: https://<n8n-host>/webhook/github-fastapi-ci (or /webhook-test/... while testing). Content type: application/json. Events: Just the push event."
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body ?? $input.first().json;\nconst headers = $input.first().json.headers ?? {};\n\nconst ref = body.ref || '';\nconst branch = ref.startsWith('refs/heads/') ? ref.replace('refs/heads/', '') : (body.branch || 'unknown');\nconst sha = (body.after || body.head_commit?.id || '').slice(0, 12) || 'latest';\nconst repo = body.repository?.full_name || body.repository?.name || 'unknown';\nconst pusher = body.pusher?.name || body.sender?.login || 'unknown';\nconst compare = body.compare || '';\nconst commits = Array.isArray(body.commits) ? body.commits.length : 0;\nconst isMain = branch === 'main' || branch === 'master';\n\nreturn [{\n  json: {\n    ref,\n    branch,\n    sha,\n    repo,\n    pusher,\n    compare,\n    commits,\n    isMain,\n    delivery: headers['x-github-delivery'] || headers['X-GitHub-Delivery'] || '',\n    event: headers['x-github-event'] || headers['X-GitHub-Event'] || 'push',\n  }\n}];"
+      },
+      "id": "code-001-parse",
+      "name": "Parse GitHub Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-main",
+              "leftValue": "={{ $json.isMain }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-001-main",
+      "name": "Is main/master?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 320]
+    },
+    {
+      "parameters": {
+        "command": "=/bin/bash -lc 'set -euo pipefail; if [ -f \"$HOME/.config/fastapi-ci.env\" ]; then set -a; source \"$HOME/.config/fastapi-ci.env\"; set +a; fi; export GIT_SHA=\"{{ $json.sha }}\" BRANCH=\"{{ $json.branch }}\" REPO_DIR=\"${REPO_DIR:-/home/yashree/development/fast-api}\" IMAGE_REPO=\"${IMAGE_REPO:-smitambalia/n8n}\"; \"${REPO_DIR}/scripts/ci-deploy.sh\" 2>&1'"
+      },
+      "id": "ssh-001-deploy",
+      "name": "SSH: Build Push Deploy",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [920, 220],
+      "notes": "Create n8n credential: SSH Password or SSH Private Key → host 10.42.0.1 (or host LAN IP), user with docker+kubectl access (e.g. yashree). Attach that credential to this node.",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const parse = $('Parse GitHub Payload').first().json;\nconst ssh = $input.first().json;\nconst stdout = ssh.stdout || ssh.data || JSON.stringify(ssh);\nconst stderr = ssh.stderr || '';\nconst code = ssh.code ?? ssh.exitCode ?? 0;\nconst ok = !stderr || String(code) === '0' || String(stdout).includes('Deployed');\n\n// Heuristic: SSH node often puts command output in stdout\nconst success = String(stdout).includes('Deployed') || (String(code) === '0' && !String(stdout).toLowerCase().includes('error'));\n\nreturn [{\n  json: {\n    success,\n    branch: parse.branch,\n    sha: parse.sha,\n    repo: parse.repo,\n    pusher: parse.pusher,\n    image: `smitambalia/n8n:${parse.sha}`,\n    stdout: String(stdout).slice(-4000),\n    stderr: String(stderr).slice(-2000),\n    summary: success\n      ? `✅ CI OK: ${parse.repo}@${parse.sha} → k3s`\n      : `❌ CI FAILED: ${parse.repo}@${parse.sha}`,\n  }\n}];"
+      },
+      "id": "code-002-result",
+      "name": "Format Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1160, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL || 'https://hooks.slack.com/services/REPLACE/ME/PLEASE' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.summary, blocks: [ { type: 'section', text: { type: 'mrkdwn', text: $json.summary + '\\n*Image:* `' + $json.image + '`\\n*Branch:* ' + $json.branch + ' by ' + $json.pusher } } ] }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "http-001-slack",
+      "name": "Notify Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 120],
+      "notes": "Set env SLACK_WEBHOOK_URL on n8n, or replace URL with your Slack Incoming Webhook. Disable this node if unused.",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.TEAMS_WEBHOOK_URL || 'https://outlook.office.com/webhook/REPLACE' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ '@type': 'MessageCard', '@context': 'http://schema.org/extensions', summary: $json.summary, themeColor: $json.success ? '00FF00' : 'FF0000', title: $json.success ? 'FastAPI CI/CD Success' : 'FastAPI CI/CD Failed', text: 'Image: ' + $json.image + ' | Branch: ' + $json.branch + ' | By: ' + $json.pusher }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "http-002-teams",
+      "name": "Notify Teams",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 320],
+      "notes": "Set env TEAMS_WEBHOOK_URL on n8n, or paste Incoming Webhook URL. Disable if unused.",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: $json.success, message: $json.summary, image: $json.image, sha: $json.sha } }}",
+        "options": {}
+      },
+      "id": "resp-001-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1640, 220]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, skipped: true, reason: 'Not main/master', branch: $json.branch, sha: $json.sha } }}",
+        "options": {}
+      },
+      "id": "resp-002-skip",
+      "name": "Respond Skipped",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [920, 460]
+    }
+  ],
+  "connections": {
+    "GitHub Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse GitHub Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse GitHub Payload": {
+      "main": [
+        [
+          {
+            "node": "Is main/master?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is main/master?": {
+      "main": [
+        [
+          {
+            "node": "SSH: Build Push Deploy",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH: Build Push Deploy": {
+      "main": [
+        [
+          {
+            "node": "Format Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Result": {
+      "main": [
+        [
+          {
+            "node": "Notify Slack",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notify Teams",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Slack": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Teams": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "cicd"
+    },
+    {
+      "name": "fastapi"
+    }
+  ]
+}

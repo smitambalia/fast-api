@@ -1,0 +1,104 @@
+{
+  "name": "Test FastAPI Health & Response",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "When clicking 'Test workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://10.42.0.1:8001/health",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+      "name": "GET Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300],
+      "notes": "k3s host gateway (cni0). Alt: http://192.168.1.11:8001/health"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://10.42.0.1:8001/api/response",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
+      "name": "GET FastAPI Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 300],
+      "notes": "k3s host gateway (cni0). Alt: http://192.168.1.11:8001/api/response"
+    },
+    {
+      "parameters": {
+        "jsCode": "const health = $('GET Health').first().json;\nconst response = $('GET FastAPI Response').first().json;\n\nconst healthOk = health.status === 'ok';\nconst responseOk = response.success === true;\n\nreturn [{\n  json: {\n    health_ok: healthOk,\n    health_body: health,\n    response_ok: responseOk,\n    response_body: response,\n    tested_at: new Date().toISOString(),\n    summary: healthOk && responseOk\n      ? 'Both FastAPI endpoints OK'\n      : 'One or more endpoints failed'\n  }\n}];"
+      },
+      "id": "d4e5f6a7-b8c9-0123-defa-234567890123",
+      "name": "Combine Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 300]
+    }
+  ],
+  "connections": {
+    "When clicking 'Test workflow'": {
+      "main": [
+        [
+          {
+            "node": "GET Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Health": {
+      "main": [
+        [
+          {
+            "node": "GET FastAPI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET FastAPI Response": {
+      "main": [
+        [
+          {
+            "node": "Combine Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "fastapi"
+    },
+    {
+      "name": "test"
+    }
+  ]
+}
