@@ -20,7 +20,7 @@ def health():
 
 @app.get("/api/response")
 def fastapi_response():
-    """GET endpoint that returns a sample FastAPI-style response."""
+    """GET endpoint that returns a sample FastAPI-style response. """
     return {
         "message": "Hello from FastAPI Smit Ambalia",
         "framework": "FastAPI",
