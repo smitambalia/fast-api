@@ -17,16 +17,25 @@ spec:
   selector:
     matchLabels:
       app: fast-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   template:
     metadata:
       labels:
         app: fast-api
     spec:
+      # Public Hub repo: no imagePullSecrets required.
+      # For a private repo, create secret dockerhub-cred and uncomment:
+      # imagePullSecrets:
+      #   - name: dockerhub-cred
       containers:
         - name: fast-api
-          # Updated by CI: smitambalia/n8n:<git-sha|latest>
           image: smitambalia/n8n:latest
-          imagePullPolicy: Always
+          # Prefer node-local image after: docker save ... | sudo k3s ctr images import -
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8001

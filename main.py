@@ -22,7 +22,7 @@ def health():
 def fastapi_response():
     """GET endpoint that returns a sample FastAPI-style response."""
     return {
-        "message": "Hello from FastAPI",
+        "message": "Hello from FastAPI for smit",
         "framework": "FastAPI",
         "success": True,
         "data": {
