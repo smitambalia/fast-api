@@ -114,22 +114,32 @@ if [[ "$DEPLOY_API" == "1" ]]; then
     docker tag "$API_IMAGE" "$API_LATEST"
   fi
   log "Pushing ${API_IMAGE}"
-  docker push "$API_IMAGE"
+  if ! docker push "$API_IMAGE"; then
+    log "WARN: docker push API failed (rate limit/auth). Will still try local k3s import."
+  fi
   if [[ "$UPDATE_LATEST" == "1" ]]; then
-    docker push "$API_LATEST"
+    docker push "$API_LATEST" || log "WARN: push api:latest failed"
   fi
 fi
 
+WEB_BUILT=0
 if [[ "$DEPLOY_WEB" == "1" ]]; then
   log "Building Web ${WEB_IMAGE}"
-  docker build -t "$WEB_IMAGE" "$WEB_DIR"
-  if [[ "$UPDATE_LATEST" == "1" ]]; then
-    docker tag "$WEB_IMAGE" "$WEB_LATEST"
-  fi
-  log "Pushing ${WEB_IMAGE}"
-  docker push "$WEB_IMAGE"
-  if [[ "$UPDATE_LATEST" == "1" ]]; then
-    docker push "$WEB_LATEST"
+  if docker build -t "$WEB_IMAGE" "$WEB_DIR"; then
+    WEB_BUILT=1
+    if [[ "$UPDATE_LATEST" == "1" ]]; then
+      docker tag "$WEB_IMAGE" "$WEB_LATEST"
+    fi
+    log "Pushing ${WEB_IMAGE}"
+    if ! docker push "$WEB_IMAGE"; then
+      log "WARN: docker push web failed (rate limit/auth). Will still try local k3s import."
+    fi
+    if [[ "$UPDATE_LATEST" == "1" ]]; then
+      docker push "$WEB_LATEST" || log "WARN: push web:latest failed"
+    fi
+  else
+    log "ERROR: Web docker build failed — continuing with API-only deploy if API succeeded"
+    DEPLOY_WEB=0
   fi
 fi
 
