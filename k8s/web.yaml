@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fast-web
+  namespace: fast-api
+  labels:
+    app: fast-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fast-web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: fast-web
+    spec:
+      containers:
+        - name: fast-web
+          # After first Hub push use :latest; for local-only load with scripts/load-images-k3s.sh
+          image: smitambalia/fast-web:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            # In-cluster DNS to API service
+            - name: API_INTERNAL_URL
+              value: "http://fast-api:8001"
+            - name: PORT
+              value: "3000"
+            - name: HOSTNAME
+              value: "0.0.0.0"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fast-web
+  namespace: fast-api
+  labels:
+    app: fast-web
+spec:
+  type: NodePort
+  selector:
+    app: fast-web
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      nodePort: 30080

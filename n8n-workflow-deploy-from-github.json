@@ -1,0 +1,148 @@
+{
+  "name": "Deploy GitHub Branch → Docker Hub → K3s",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger-001",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "asg-url",
+              "name": "github_url",
+              "value": "https://github.com/smitambalia/fast-api",
+              "type": "string"
+            },
+            {
+              "id": "asg-branch",
+              "name": "branch",
+              "value": "main",
+              "type": "string"
+            },
+            {
+              "id": "asg-api",
+              "name": "deploy_api",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "asg-web",
+              "name": "deploy_web",
+              "value": true,
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-inputs-001",
+      "name": "GitHub URL + Branch",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 300],
+      "notes": "EDIT THESE before Execute workflow:\n• github_url — e.g. https://github.com/smitambalia/fast-api\n• branch — e.g. main\n• deploy_api / deploy_web — true/false"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json;\n\nlet githubUrl = String(body.github_url || body.githubUrl || body.repo || '').trim();\nlet branch = String(body.branch || body.ref || 'main').trim();\n\nif (branch.startsWith('refs/heads/')) {\n  branch = branch.replace('refs/heads/', '');\n}\n\nif (!githubUrl) {\n  throw new Error('Set github_url in node \"GitHub URL + Branch\"');\n}\nif (!branch) {\n  throw new Error('Set branch in node \"GitHub URL + Branch\"');\n}\n\nlet cloneUrl = githubUrl.replace(/\\/+$/, '');\nif (!cloneUrl.endsWith('.git')) {\n  cloneUrl = cloneUrl + '.git';\n}\nif (!/^https?:\\/\\//i.test(cloneUrl) && cloneUrl.includes('github.com')) {\n  cloneUrl = 'https://' + cloneUrl.replace(/^\\/+/, '');\n}\n\nconst deployApi = body.deploy_api !== false && body.deploy_api !== 0 && body.deploy_api !== '0';\nconst deployWeb = body.deploy_web !== false && body.deploy_web !== 0 && body.deploy_web !== '0';\n\nreturn [{\n  json: {\n    github_url: githubUrl,\n    clone_url: cloneUrl,\n    branch,\n    deploy_api: deployApi,\n    deploy_web: deployWeb,\n    requested_at: new Date().toISOString(),\n  }\n}];"
+      },
+      "id": "code-parse-001",
+      "name": "Normalize inputs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "command": "=/bin/bash -lc 'set -euo pipefail\nif [ -f \"$HOME/.config/fastapi-ci.env\" ]; then set -a; . \"$HOME/.config/fastapi-ci.env\"; set +a; fi\nexport GITHUB_URL={{ JSON.stringify($json.clone_url) }}\nexport BRANCH={{ JSON.stringify($json.branch) }}\nexport DEPLOY_API={{ $json.deploy_api ? \"1\" : \"0\" }}\nexport DEPLOY_WEB={{ $json.deploy_web ? \"1\" : \"0\" }}\nexport API_IMAGE_REPO=\"${API_IMAGE_REPO:-smitambalia/n8n}\"\nexport WEB_IMAGE_REPO=\"${WEB_IMAGE_REPO:-smitambalia/fast-web}\"\nexport KUBECONFIG_PATH=\"${KUBECONFIG_PATH:-$HOME/.kube/k3s.yaml}\"\nexport WORK_ROOT=\"${WORK_ROOT:-$HOME/.cache/n8n-ci-builds}\"\nSCRIPT=\"${DEPLOY_SCRIPT:-/home/yashree/development/fast-api/scripts/deploy-from-github.sh}\"\nif [ ! -x \"$SCRIPT\" ]; then chmod +x \"$SCRIPT\" || true; fi\n\"$SCRIPT\" 2>&1'"
+      },
+      "id": "ssh-deploy-001",
+      "name": "SSH: Clone Build Push Deploy",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [960, 300],
+      "notes": "SSH credential: host 10.42.0.1, user yashree. Runs deploy-from-github.sh with GITHUB_URL + BRANCH from the Set node."
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Normalize inputs').first().json;\nconst item = $input.first().json;\nconst stdout = String(item.stdout ?? item.data ?? JSON.stringify(item));\nconst stderr = String(item.stderr ?? '');\nconst success =\n  stdout.includes('Deployed') ||\n  (stdout.includes('api=') && stdout.includes('web=') && !/\\bERROR:/i.test(stdout));\n\nconst apiMatch = stdout.match(/API_IMAGE=(\\S+)/) || stdout.match(/api=(\\S+\\/\\S+)/);\nconst webMatch = stdout.match(/WEB_IMAGE=(\\S+)/) || stdout.match(/web=(\\S+\\/\\S+)/);\n\nreturn [{\n  json: {\n    success,\n    github_url: input.github_url,\n    branch: input.branch,\n    api_image: apiMatch ? apiMatch[1] : null,\n    web_image: webMatch ? webMatch[1] : null,\n    stdout: stdout.slice(-6000),\n    stderr: stderr.slice(-2000),\n    summary: success\n      ? `Deployed ${input.github_url}@${input.branch} → k3s`\n      : `Deploy FAILED for ${input.github_url}@${input.branch}`,\n    urls: {\n      web: 'http://192.168.1.11:30080',\n      api: 'http://192.168.1.11:30081',\n      health: 'http://192.168.1.11:30081/health',\n    },\n  }\n}];"
+      },
+      "id": "code-format-001",
+      "name": "Format Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1220, 300]
+    }
+  ],
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [
+        [
+          {
+            "node": "GitHub URL + Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub URL + Branch": {
+      "main": [
+        [
+          {
+            "node": "Normalize inputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize inputs": {
+      "main": [
+        [
+          {
+            "node": "SSH: Clone Build Push Deploy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH: Clone Build Push Deploy": {
+      "main": [
+        [
+          {
+            "node": "Format Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "cicd"
+    },
+    {
+      "name": "github"
+    },
+    {
+      "name": "k3s"
+    }
+  ]
+}

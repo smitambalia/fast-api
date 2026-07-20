@@ -150,33 +150,72 @@ Open node **SSH: Build Push Deploy**:
 
 ### 3. Activate workflow
 
-Toggle **Active**.  
-Production webhook path:
+Toggle **Active**.
 
-```text
-http://<n8n-url>/webhook/github-fastapi-ci
+#### Public webhook (VS Code Dev Tunnel) — current setup
+
+Port-forward n8n NodePort **30678** via VS Code / dev tunnels, then use:
+
+| Mode | URL |
+|------|-----|
+| **Production (Active)** | `https://kk01hvzx-30678.inc1.devtunnels.ms/webhook/github-fastapi-ci` |
+| **Test (Listen once)** | `https://kk01hvzx-30678.inc1.devtunnels.ms/webhook-test/github-fastapi-ci` |
+
+**Important:** the tunnel must stay running or GitHub deliveries will fail (timeouts / 502).
+
+#### Why n8n UI may show `http://127.0.0.1:30678/...`
+
+The Webhook node **Test URL / Production URL** is built from the n8n env var **`WEBHOOK_URL`**, not from the workflow JSON notes.
+
+Cluster setting (namespace `aaf-n8n`, ConfigMap `n8n-config`):
+
+```bash
+export KUBECONFIG=~/.kube/k3s.yaml
+kubectl -n aaf-n8n get configmap n8n-config -o yaml | grep -E 'WEBHOOK|EDITOR|HOST|PROTOCOL'
+
+# Point n8n at the public tunnel:
+kubectl -n aaf-n8n patch configmap n8n-config --type merge -p '{
+  "data": {
+    "WEBHOOK_URL": "https://kk01hvzx-30678.inc1.devtunnels.ms/",
+    "N8N_EDITOR_BASE_URL": "https://kk01hvzx-30678.inc1.devtunnels.ms/",
+    "N8N_HOST": "kk01hvzx-30678.inc1.devtunnels.ms",
+    "N8N_PROTOCOL": "https",
+    "N8N_SECURE_COOKIE": "true",
+    "N8N_PROXY_HOPS": "1"
+  }
+}'
+kubectl -n aaf-n8n rollout restart deployment/n8n
 ```
 
-Find your n8n URL (NodePort example):
+Then hard-refresh the n8n UI. The webhook panel should show the tunnel host.  
+If the tunnel subdomain changes later, update `WEBHOOK_URL` again.
+
+#### Local fallback (LAN only — GitHub cannot reach this)
+
+```text
+http://192.168.1.11:30678/webhook/github-fastapi-ci
+```
 
 ```bash
 export KUBECONFIG=~/.kube/k3s.yaml
 kubectl -n aaf-n8n get svc n8n
-# NodePort 30678 → http://192.168.1.11:30678
+# NodePort 30678
 ```
-
-If you use Ingress/TLS, use that public HTTPS URL (GitHub prefers HTTPS for webhooks).
 
 ### 4. GitHub webhook
 
-In the **GitHub repository** that holds this project:
+In the **GitHub repository** that holds this project (`smitambalia/fast-api`):
 
 1. **Settings → Webhooks → Add webhook**
-2. **Payload URL**: `https://<n8n-host>/webhook/github-fastapi-ci`
+2. **Payload URL**:
+   ```text
+   https://kk01hvzx-30678.inc1.devtunnels.ms/webhook/github-fastapi-ci
+   ```
 3. **Content type**: `application/json`
 4. **Secret**: optional (add validation later in Code node)
 5. **Events**: Just the **push** event  
-6. Save
+6. Save  
+7. Confirm workflow is **Active** and the **dev tunnel is up**
 
 ### 5. Slack / Teams (optional)
 
@@ -202,21 +241,23 @@ kubectl -n aaf-n8n rollout restart deploy/n8n
 
 ### A. Test webhook without GitHub
 
-In n8n, open **GitHub Webhook** → **Listen for test event**, then:
+**Active workflow + public tunnel:**
 
 ```bash
-curl -sS -X POST "http://192.168.1.11:30678/webhook-test/github-fastapi-ci" \
+curl -sS -X POST "https://kk01hvzx-30678.inc1.devtunnels.ms/webhook/github-fastapi-ci" \
   -H "Content-Type: application/json" \
+  -H "X-GitHub-Event: push" \
   -d '{
     "ref": "refs/heads/main",
     "after": "abcdef1234567890",
-    "repository": { "full_name": "you/fast-api" },
+    "repository": { "full_name": "smitambalia/fast-api" },
     "pusher": { "name": "local-test" },
     "commits": [{ "id": "abcdef1234567890", "message": "test" }]
   }'
 ```
 
-(Use `/webhook/` instead of `/webhook-test/` when the workflow is **Active**.)
+Or in n8n: **GitHub Webhook** → **Listen for test event**, then POST to  
+`https://kk01hvzx-30678.inc1.devtunnels.ms/webhook-test/github-fastapi-ci`.
 
 ### B. Real push
 
@@ -278,16 +319,45 @@ And update `k8s/deployment.yaml` image field.
 | n8n cannot resolve Slack URL | disable node or set real webhook URL |
 | Wrong git revision | host `REPO_DIR` must be this project clone with remotes |
 
-Private Docker Hub repo pull secret example:
+### Private Docker Hub + rollout timeout (`ErrImagePull` / 401)
+
+Push can succeed (your laptop is logged in) while **k3s fails to pull** the same private image:
+
+```text
+ErrImagePull … 401 Unauthorized
+```
+
+**Fix A — pull secret (recommended for private repos)**
 
 ```bash
 export KUBECONFIG=~/.kube/k3s.yaml
-kubectl -n fast-api create secret docker-registry dockerhub \
+
+# Use a Docker Hub Access Token with Read (+ Write if you also push)
+kubectl -n fast-api create secret docker-registry dockerhub-cred \
   --docker-server=https://index.docker.io/v1/ \
   --docker-username=smitambalia \
-  --docker-password='USE_ACCESS_TOKEN_NOT_CHAT_PASSWORD'
-# then patch deployment pod spec: imagePullSecrets: [{name: dockerhub}]
+  --docker-password='YOUR_ACCESS_TOKEN' \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl -n fast-api apply -f k8s/deployment.yaml
+kubectl -n fast-api set image deployment/fast-api fast-api=smitambalia/n8n:ebb8452
+kubectl -n fast-api rollout restart deployment/fast-api
+kubectl -n fast-api rollout status deployment/fast-api
 ```
+
+Or put `DOCKERHUB_USERNAME` / `DOCKERHUB_PASSWORD` in `~/.config/fastapi-ci.env` and re-run `scripts/ci-deploy.sh` (it creates `dockerhub-cred` automatically).
+
+**Fix B — import local image into k3s** (same machine that built the image):
+
+```bash
+docker save smitambalia/n8n:ebb8452 smitambalia/n8n:latest | sudo k3s ctr images import -
+export KUBECONFIG=~/.kube/k3s.yaml
+kubectl -n fast-api rollout restart deployment/fast-api
+```
+
+Manifest uses `imagePullPolicy: IfNotPresent`, so a node-local image can start without Hub.
+
+**Fix C — make the Hub repo public** (simplest): Docker Hub → `smitambalia/n8n` → Settings → Public.
 
 ---
 

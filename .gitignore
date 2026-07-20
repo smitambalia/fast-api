@@ -77,6 +77,15 @@ logs/
 *.pid.lock
 .cache/
 
+# Node / Next.js
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+apps/web/.env.local
+
 # CI secrets (never commit)
 scripts/ci.env
 *.ci.env

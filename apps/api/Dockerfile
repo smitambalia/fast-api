@@ -12,5 +12,4 @@ COPY main.py .
 
 EXPOSE 8001
 
-# Match the port used in local/dev and k8s Service
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]

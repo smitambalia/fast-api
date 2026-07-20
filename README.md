@@ -1,68 +1,99 @@
-# Simple FastAPI Demo
+# FastAPI + Next.js monorepo (Docker + k3s)
 
-Minimal FastAPI app with a health check and a sample GET response, plus n8n workflows for API tests and CI/CD.
-
-## CI/CD (GitHub → Docker Hub → K3s via n8n)
-
-See **[docs/CICD-N8N.md](docs/CICD-N8N.md)** for the full pipeline:
-
-Git push → GitHub webhook → n8n → SSH to host → `docker build/push` → `kubectl` deploy → Slack/Teams.
-
-- Workflow: `n8n-workflow-cicd-fastapi.json`
-- Host script: `scripts/ci-deploy.sh`
-- Manifests: `k8s/deployment.yaml`
-- Image (Docker Hub): `smitambalia/n8n`
-
-## Endpoints
-
-| Method | Path            | Description                          |
-|--------|-----------------|--------------------------------------|
-| GET    | `/`             | Root — lists available routes        |
-| GET    | `/health`       | Health check                         |
-| GET    | `/api/response` | Sample FastAPI JSON response         |
-| GET    | `/docs`         | Interactive Swagger UI               |
-
-## Run locally
-
-```bash
-# From this directory
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# Bind 0.0.0.0 so n8n in Docker/k3s can reach the host
-# Port 8001 — 8000 is often used by other local services
-uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+```text
+fast-api/
+├── apps/
+│   ├── api/          # FastAPI  → image smitambalia/n8n
+│   └── web/          # Next.js  → image smitambalia/fast-web
+├── k8s/              # namespace, api, web manifests
+├── scripts/          # ci-deploy.sh (both apps)
+└── package.json
 ```
 
-Quick smoke test:
+## Cluster URLs (NodePort)
+
+| Service | URL |
+|---------|-----|
+| **Web UI** | http://192.168.1.11:30080 |
+| **API** | http://192.168.1.11:30081 |
+| Health | http://192.168.1.11:30081/health |
+| Swagger | http://192.168.1.11:30081/docs |
+
+The web app calls FastAPI via same-origin **`/backend/*`** (Next.js proxy → `http://fast-api:8001` in-cluster).
+
+## Local development
 
 ```bash
-curl http://127.0.0.1:8001/health
-curl http://127.0.0.1:8001/api/response
+# API
+cd apps/api && uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+
+# Web (proxies /backend → API_INTERNAL_URL in .env.local)
+cd ../..
+npm run install:web
+npm run dev:web
+# http://localhost:3000
 ```
 
-## n8n workflow
+## Docker build (local)
 
-Import `n8n-workflow-test-fastapi.json` in n8n:
+```bash
+docker build -t smitambalia/n8n:local apps/api
+docker build -t smitambalia/fast-web:local apps/web
+```
 
-1. Open n8n → **Workflows** → **Import from File** (or menu → Import)
-2. Select `n8n-workflow-test-fastapi.json`
-3. Update the base URL on both HTTP Request nodes if needed (see below)
-4. Click **Test workflow**
+### Load into k3s (same machine)
 
-### Reaching FastAPI from n8n in Docker / k3s
+```bash
+./scripts/load-images-k3s.sh local
+export KUBECONFIG=~/.kube/k3s.yaml
+kubectl apply -f k8s/namespace.yaml -f k8s/api.yaml -f k8s/web.yaml
+kubectl -n fast-api set image deploy/fast-api fast-api=smitambalia/n8n:local
+kubectl -n fast-api set image deploy/fast-web fast-web=smitambalia/fast-web:local
+kubectl -n fast-api get pods,svc
+```
 
-### Reaching FastAPI from n8n in k3s (this machine)
+### Or push to Docker Hub then deploy
 
-`host.docker.internal` **does not work** in k3s pods. Use one of these instead:
+```bash
+docker tag smitambalia/n8n:local smitambalia/n8n:latest
+docker tag smitambalia/fast-web:local smitambalia/fast-web:latest
+docker push smitambalia/n8n:latest
+docker push smitambalia/fast-web:latest   # create Hub repo "fast-web" first if needed
 
-| From n8n (k3s pod) | URL | Notes |
-|--------------------|-----|--------|
-| **Recommended**    | `http://10.42.0.1:8001` | k3s host on CNI bridge (`cni0`) |
-| LAN IP             | `http://192.168.1.11:8001` | Wi‑Fi IP (can change with DHCP) |
-| Localhost          | `http://127.0.0.1:8001` | **Only** if n8n runs on the host, not in a pod |
+export KUBECONFIG=~/.kube/k3s.yaml
+kubectl apply -k k8s/
+kubectl -n fast-api rollout restart deploy/fast-api deploy/fast-web
+```
 
-Verified from pod `n8n-56f684f68c-v4xx5` in namespace `aaf-n8n`: both `10.42.0.1` and `192.168.1.11` return `/health` OK.
+## CI/CD (n8n)
 
-Keep FastAPI on `--host 0.0.0.0 --port 8001` so pods can reach it.
+### A) Deploy by GitHub URL + branch (recommended)
+
+Import **`n8n-workflow-deploy-from-github.json`**.
+
+1. Open node **GitHub URL + Branch** → set `github_url` and `branch`
+2. Click **Execute workflow**
+
+Host script: `scripts/deploy-from-github.sh`  
+Docs: [docs/DEPLOY-FROM-GITHUB.md](docs/DEPLOY-FROM-GITHUB.md)
+
+### B) Deploy fixed local clone (push webhook)
+
+`scripts/ci-deploy.sh` builds both images from the host checkout, pushes, applies k8s, waits for rollouts.  
+See [docs/CICD-N8N.md](docs/CICD-N8N.md).
+
+| Variable | Default |
+|----------|---------|
+| `API_IMAGE_REPO` | `smitambalia/n8n` |
+| `WEB_IMAGE_REPO` | `smitambalia/fast-web` |
+| `DEPLOY_API` / `DEPLOY_WEB` | `1` |
+
+## Architecture
+
+```text
+Browser → :30080 fast-web (Next.js)
+              │
+              │  /backend/*  (server-side proxy)
+              ▼
+         fast-api:8001 (in-cluster)  → also NodePort :30081
+```

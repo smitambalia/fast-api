@@ -1,77 +1,9 @@
+# Backward-compatible entry: prefer applying all k8s resources.
+# New layout:
+#   kubectl apply -f k8s/namespace.yaml -f k8s/api.yaml -f k8s/web.yaml
+# Or: kubectl apply -k k8s/
+#
+# This file re-applies API only for older scripts; CI now uses api.yaml + web.yaml.
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: fast-api
-  labels:
-    app: fast-api
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: fast-api
-  namespace: fast-api
-  labels:
-    app: fast-api
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: fast-api
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
-  template:
-    metadata:
-      labels:
-        app: fast-api
-    spec:
-      # Public Hub repo: no imagePullSecrets required.
-      # For a private repo, create secret dockerhub-cred and uncomment:
-      # imagePullSecrets:
-      #   - name: dockerhub-cred
-      containers:
-        - name: fast-api
-          image: smitambalia/n8n:latest
-          # Prefer node-local image after: docker save ... | sudo k3s ctr images import -
-          imagePullPolicy: IfNotPresent
-          ports:
-            - name: http
-              containerPort: 8001
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 15
-            periodSeconds: 20
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 500m
-              memory: 256Mi
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: fast-api
-  namespace: fast-api
-  labels:
-    app: fast-api
-spec:
-  type: NodePort
-  selector:
-    app: fast-api
-  ports:
-    - name: http
-      port: 8001
-      targetPort: http
-      nodePort: 30081
+kind: List
+items: []

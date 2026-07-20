@@ -1,0 +1,21 @@
+{
+  "name": "fast-api-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Monorepo: FastAPI (apps/api) + Next.js (apps/web)",
+  "scripts": {
+    "dev:web": "npm --prefix apps/web run dev",
+    "build:web": "npm --prefix apps/web run build",
+    "start:web": "npm --prefix apps/web run start",
+    "lint:web": "npm --prefix apps/web run lint",
+    "install:web": "npm --prefix apps/web install",
+    "dev:api": "cd apps/api && uvicorn main:app --host 0.0.0.0 --port 8001 --reload",
+    "docker:api": "docker build -t smitambalia/n8n:local apps/api",
+    "docker:web": "docker build -t smitambalia/fast-web:local apps/web",
+    "docker:all": "npm run docker:api && npm run docker:web",
+    "k8s:apply": "kubectl --kubeconfig=$HOME/.kube/k3s.yaml apply -f k8s/namespace.yaml -f k8s/api.yaml -f k8s/web.yaml"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
