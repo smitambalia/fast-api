@@ -56,6 +56,23 @@ No webhook required. You type URL + branch in n8n, then click **Execute workflow
 
 After a successful run, open **Format Result** / **Executions** for summary and image tags.
 
+### Success vs failure in n8n
+
+| What you see | Meaning |
+|--------------|---------|
+| All nodes **green** + `DEPLOY_RESULT=SUCCESS` in SSH log | Real success |
+| SSH or Format Result **red** | Deploy failed (build/push/rollout) |
+| Green nodes but cluster still old | Old bug: false success heuristic — fixed; re-import workflow |
+
+The script always prints one of:
+
+```text
+DEPLOY_RESULT=SUCCESS
+DEPLOY_RESULT=FAILED
+```
+
+Only `SUCCESS` counts. Partial lines like `API_IMAGE=...` alone are **not** success.
+
 ## Manual host test (no n8n)
 
 ```bash

@@ -29,7 +29,7 @@ def health():
     """Simple health check endpoint."""
     return {
         "status": "ok",
-        "service": "fast-api-demo 1",
+        "service": "fast-api 5",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 

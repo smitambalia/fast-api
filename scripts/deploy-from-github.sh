@@ -23,7 +23,11 @@ UPDATE_LATEST="${UPDATE_LATEST:-1}"
 
 log() { echo "[deploy-github $(date -Is)] $*"; }
 
-die() { log "ERROR: $*"; exit 1; }
+die() {
+  log "ERROR: $*"
+  echo "DEPLOY_RESULT=FAILED"
+  exit 1
+}
 
 write_status() {
   local ok="$1"
@@ -33,7 +37,13 @@ write_status() {
 EOF
 }
 
-trap 'write_status false "failed at line $LINENO"' ERR
+on_err() {
+  local line="${1:-unknown}"
+  write_status false "failed at line ${line}"
+  echo "DEPLOY_RESULT=FAILED"
+  echo "DEPLOY_EXIT_CODE=1"
+}
+trap 'on_err $LINENO; exit 1' ERR
 
 [[ -n "$GITHUB_URL" ]] || die "GITHUB_URL is required (e.g. https://github.com/org/repo.git)"
 [[ -n "$BRANCH" ]] || die "BRANCH is required"
@@ -207,4 +217,9 @@ log "$MSG"
 write_status true "$MSG"
 echo "$MSG"
 echo "URLs: web=http://192.168.1.11:30080 api=http://192.168.1.11:30081"
+# Explicit markers for n8n Format Result (do not treat partial logs as success)
+echo "DEPLOY_RESULT=SUCCESS"
+echo "DEPLOY_EXIT_CODE=0"
+echo "DEPLOY_API_IMAGE=${API_IMAGE}"
+echo "DEPLOY_WEB_IMAGE=${WEB_IMAGE:-skipped}"
 exit 0
